@@ -18,7 +18,7 @@ function drawFrame(ctx, timestamp) {
   const sm = STATE.schematicMix;
   if (sm < 1) {
     ctx.globalAlpha = 1 - sm;
-    drawReturnPipe(ctx);
+    drawBottomSection(ctx, timestamp);
     drawTankShell(ctx);
     // Strict left-to-right painter's order: chamber 0, barrier 0, chamber 1,
     // barrier 1, ..., last chamber. Cabinet projection shifts +z up-right, so
@@ -32,7 +32,6 @@ function drawFrame(ctx, timestamp) {
       drawSlot(ctx, i);
     }
     drawWaterChamber(ctx, tNodes[N], N, timestamp);
-    drawPump(ctx, timestamp);
     ctx.globalAlpha = 1;
     drawParticles(ctx, 1 - sm * 0.7);
   }
@@ -254,66 +253,74 @@ function getSpongeTexture(slot, k, kKey, role) {
   return c;
 }
 
-// ── Bottom return duct + vertical drop pipes ────────────────────────────────
-// Painter's-algorithm draw order: back face → drop pipes (back) → duct sides
-// → drop pipes (front) → duct front. Drop pipes anchor at chamber centres so
-// the visual lines up with the actual edge paths in the model.
-function drawReturnPipe(ctx) {
+// ── Bottom section: return duct + drop pipes + pump, woven left-to-right ──
+// Pass 1 paints all z=D back faces (always behind). Pass 2 paints front-z
+// elements strictly left-to-right by world x: left end cap → left drop pipe
+// → left duct arm → PUMP → right duct arm → right drop pipe → right end cap.
+// Cabinet projection's z-shift means later-drawn columns overlap the back-z
+// extrusions of earlier-drawn columns, which is the correct occlusion order.
+function drawBottomSection(ctx, timestamp) {
   const ld = STATE.layoutData; if (!ld) return;
   const W = ld.totalWidth, D = CONFIG.PIPE.DEPTH;
   const yT = CONFIG.PIPE.BOTTOM_Y, yB = yT - CONFIG.PIPE.BOTTOM_HEIGHT;
   const arm = CONFIG.PUMP.WIDTH / 2;
   const pc = ld.pumpCenterX;
   const dHW = CONFIG.PIPE.DROP_HALF_WIDTH;
-  // Drop-pipe anchor x: end-chamber centres (matches the actual model edge paths).
   const xL = ld.chamberCX[0];
   const xR = ld.chamberCX[ld.chamberCX.length - 1];
-  // Pipe colour palette (slightly cooler than the tank shell so they stand apart).
   const cBack = '#82878f', cBackLit = '#9499a2', cSide = '#a8acb4', cFront = '#cfd3d9', cFrontEdge = '#7a7e86';
 
-  // ── 1. duct back face (full width)
+  // ── PASS 1: z=D back faces (drawn behind all front-z columns)
   poly(ctx, pp([{x:0,y:yB,z:D},{x:W,y:yB,z:D},{x:W,y:yT,z:D},{x:0,y:yT,z:D}]), cBack, cBackLit, 0.5);
-
-  // ── 2. drop-pipe back faces (between tank floor y=0 and duct top y=yT)
   for (const xC of [xL, xR]) {
     poly(ctx, pp([
       {x:xC-dHW, y:yT, z:D}, {x:xC+dHW, y:yT, z:D},
       {x:xC+dHW, y:0,  z:D}, {x:xC-dHW, y:0,  z:D}
     ]), cBack);
   }
-
-  // ── 3. duct top (left and right of pump cutout) — visible because y_top is below the tank
+  // duct top (extends in z, drawn before front faces)
   for (const [x0,x1] of [[0, pc - arm], [pc + arm, W]]) {
     poly(ctx, pp([{x:x0,y:yT,z:0},{x:x1,y:yT,z:0},{x:x1,y:yT,z:D},{x:x0,y:yT,z:D}]), cSide, cBackLit, 0.5);
   }
-
-  // ── 4. duct bottom (visible underside)
+  // duct bottom underside
   poly(ctx, pp([{x:0,y:yB,z:0},{x:W,y:yB,z:0},{x:W,y:yB,z:D},{x:0,y:yB,z:D}]), '#7a7e86');
 
-  // ── 5. duct end caps (left and right outermost faces)
-  poly(ctx, pp([{x:0,y:yB,z:0},{x:0,y:yT,z:0},{x:0,y:yT,z:D},{x:0,y:yB,z:D}]), cSide, cBackLit, 0.5);
-  poly(ctx, pp([{x:W,y:yB,z:0},{x:W,y:yT,z:0},{x:W,y:yT,z:D},{x:W,y:yB,z:D}]), cSide, cBackLit, 0.5);
-
-  // ── 6. drop-pipe side faces (front-facing right side of each drop-pipe — these "sell" the 3D shape)
-  for (const xC of [xL, xR]) {
+  // ── PASS 2: front-z columns left-to-right
+  // helper for drop-pipe right side + front face
+  function paintDropPipe(xC) {
     poly(ctx, pp([
       {x:xC+dHW, y:yT, z:0}, {x:xC+dHW, y:0, z:0},
       {x:xC+dHW, y:0,  z:D}, {x:xC+dHW, y:yT, z:D}
     ]), cSide, cBackLit, 0.5);
-  }
-
-  // ── 7. duct front face — split around the pump cutout
-  for (const [x0,x1] of [[0, pc - arm], [pc + arm, W]]) {
-    poly(ctx, pp([{x:x0,y:yB,z:0},{x:x1,y:yB,z:0},{x:x1,y:yT,z:0},{x:x0,y:yT,z:0}]), cFront, cFrontEdge, 1);
-  }
-
-  // ── 8. drop-pipe front faces (drawn last so they sit on top of duct front)
-  for (const xC of [xL, xR]) {
     poly(ctx, pp([
       {x:xC-dHW, y:yT, z:0}, {x:xC+dHW, y:yT, z:0},
       {x:xC+dHW, y:0,  z:0}, {x:xC-dHW, y:0,  z:0}
     ]), cFront, cFrontEdge, 1);
   }
+  // helper for a span of duct front face
+  function paintDuctFront(x0, x1) {
+    if (x1 <= x0) return;
+    poly(ctx, pp([{x:x0,y:yB,z:0},{x:x1,y:yB,z:0},{x:x1,y:yT,z:0},{x:x0,y:yT,z:0}]), cFront, cFrontEdge, 1);
+  }
+
+  // left end cap (x=0 face)
+  poly(ctx, pp([{x:0,y:yB,z:0},{x:0,y:yT,z:0},{x:0,y:yT,z:D},{x:0,y:yB,z:D}]), cSide, cBackLit, 0.5);
+  // left arm of duct front, up to left drop pipe
+  paintDuctFront(0, xL - dHW);
+  // left drop pipe
+  paintDropPipe(xL);
+  // left arm of duct front, drop pipe to pump
+  paintDuctFront(xL + dHW, pc - arm);
+  // pump (between pc-arm and pc+arm)
+  drawPump(ctx, timestamp);
+  // right arm of duct front, pump to right drop pipe
+  paintDuctFront(pc + arm, xR - dHW);
+  // right drop pipe
+  paintDropPipe(xR);
+  // right arm of duct front, drop pipe to right edge
+  paintDuctFront(xR + dHW, W);
+  // right end cap (x=W face) — drawn last so nothing leftward overlaps it
+  poly(ctx, pp([{x:W,y:yB,z:0},{x:W,y:yT,z:0},{x:W,y:yT,z:D},{x:W,y:yB,z:D}]), cSide, cBackLit, 0.5);
 }
 
 // ── Pump ─────────────────────────────────────────────────────────────────────
@@ -325,37 +332,37 @@ function drawPump(ctx, timestamp) {
   poly(ctx, pp([{x:cx+arm,y:yB,z:0},{x:cx+arm,y:yT,z:0},{x:cx+arm,y:yT,z:D},{x:cx+arm,y:yB,z:D}]), '#234c7a');
   poly(ctx, pp([{x:cx-arm,y:yT,z:0},{x:cx+arm,y:yT,z:0},{x:cx+arm,y:yT,z:D},{x:cx-arm,y:yT,z:D}]), '#4878a8');
   poly(ctx, pp([{x:cx-arm,y:yB,z:0},{x:cx+arm,y:yB,z:0},{x:cx+arm,y:yT,z:0},{x:cx-arm,y:yT,z:0}]), '#3a6ea0', '#1e3d60', 1);
-  // impeller — sits in the LEFT half (V-source side)
+  // ── impeller: three curved propeller blades, centred in the pump body
+  // (R_int is a model abstraction, shown only in schematic mode; no separate
+  //  visual element for it on the 3D pump body.)
   const pwr = STATE.pumpTarget;
-  const cxImp = cx - arm / 2;
-  const ctr = project(cxImp, (yB + yT) / 2, 0);
-  const rOut = arm * CONFIG.VIEW.PX_PER_UNIT * 0.32;
+  const ctr = project(cx, (yB + yT) / 2, 0);
+  const rOut = arm * CONFIG.VIEW.PX_PER_UNIT * 0.42;
   const rHub = rOut * 0.22;
   const angle = (timestamp / 1000) * pwr * Math.PI * 8;
   ctx.save();
-  ctx.strokeStyle = pwr > 0.01 ? '#90c8ff' : '#5a85b0'; ctx.lineWidth = 2;
-  for (let s = 0; s < 6; s++) {
-    const a = angle + s / 6 * Math.PI * 2;
-    ctx.beginPath(); ctx.moveTo(ctr.sx + Math.cos(a)*rHub, ctr.sy + Math.sin(a)*rHub);
-    ctx.lineTo(ctr.sx + Math.cos(a)*rOut, ctr.sy + Math.sin(a)*rOut); ctx.stroke();
+  ctx.strokeStyle = pwr > 0.01 ? '#cfe6ff' : '#7a9ec4';
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  for (let b = 0; b < 3; b++) {
+    const baseA = angle + b * (Math.PI * 2 / 3);
+    const tipA  = baseA + 0.55;             // swirl: tip lags root → curved blade
+    const ctrlA = baseA + 0.25;
+    const x1 = ctr.sx + Math.cos(baseA) * rHub;
+    const y1 = ctr.sy + Math.sin(baseA) * rHub;
+    const x2 = ctr.sx + Math.cos(tipA)  * rOut;
+    const y2 = ctr.sy + Math.sin(tipA)  * rOut;
+    const cxq = ctr.sx + Math.cos(ctrlA) * rOut * 0.6;
+    const cyq = ctr.sy + Math.sin(ctrlA) * rOut * 0.6;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.quadraticCurveTo(cxq, cyq, x2, y2);
+    ctx.stroke();
   }
-  ctx.fillStyle = '#3060a0'; ctx.beginPath(); ctx.arc(ctr.sx, ctr.sy, rHub, 0, Math.PI*2); ctx.fill();
-
-  // internal-resistance coil — sits in the RIGHT half (between nPumpIn and nPumpMid)
-  const cxRes = cx + arm / 2;
-  const cy = (yB + yT) / 2;
-  const coilL = project(cxRes - arm * 0.4, cy, 0);
-  const coilR = project(cxRes + arm * 0.4, cy, 0);
-  ctx.strokeStyle = '#cc8a3a'; ctx.lineWidth = 2;
-  const segs = 8;
-  ctx.beginPath();
-  for (let s = 0; s <= segs; s++) {
-    const t = s / segs;
-    const px = coilL.sx + (coilR.sx - coilL.sx) * t;
-    const py = coilL.sy + (s % 2 === 0 ? -4 : 4);
-    s ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
-  }
-  ctx.stroke();
+  ctx.lineCap = 'butt';
+  // hub
+  ctx.fillStyle = '#3060a0';
+  ctx.beginPath(); ctx.arc(ctr.sx, ctr.sy, rHub, 0, Math.PI * 2); ctx.fill();
 
   if (pwr > 0.01) {
     const lp = project(cx, yT + 0.12, 0);
