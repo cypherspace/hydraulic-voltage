@@ -20,6 +20,10 @@ function drawFrame(ctx, timestamp) {
     ctx.globalAlpha = 1 - sm;
     drawReturnPipe(ctx);
     drawTankShell(ctx);
+    // Water first inside its chamber bounds; barriers then sit IN FRONT of it
+    // as the foreground object. drawOneBarrier itself paints a water-tint
+    // overlay on its own front face up to the local water level, which gives
+    // the "submerged base + clear above-water" look.
     drawWater(ctx, timestamp);
     drawBarriers(ctx);
     drawPump(ctx, timestamp);
@@ -59,12 +63,13 @@ function drawWater(ctx, timestamp) {
 
   const N = tNodes.length;
   const W = ld.totalWidth;
-  const barHw = 0.11; // matches drawOneBarrier; keeps water meeting the barrier face without overlap
+  const barHw = 0.11; // matches drawOneBarrier; water front meets the barrier face exactly
   for (let i = 0; i < N; i++) {
     const n = tNodes[i], h = n.h;
     if (h < 0.01) continue;
-    // Water spans from the previous barrier's right face to the next barrier's left face,
-    // or to the tank wall at the ends — so chambers visually merge into one partitioned tank.
+    // Water sits in the chamber, butting up against the adjacent barrier faces.
+    // The barrier itself is drawn after and paints its own submerged-tint band
+    // — water doesn't need to cover the barrier x-range here.
     const xL = (i === 0)     ? 0 : (ld.slotCX[i - 1] + barHw);
     const xR = (i === N - 1) ? W : (ld.slotCX[i]     - barHw);
     const flow = Math.abs(n.lastNetFlow || 0);
@@ -154,20 +159,24 @@ function drawWater(ctx, timestamp) {
 function drawBarriers(ctx) {
   const ld = STATE.layoutData; if (!ld) return;
   const D = CONFIG.PIPE.DEPTH, Hm = CONFIG.TANK.H_MAX;
+  // Adjacent chamber heights — used to draw a water-tint band on the
+  // submerged portion of each barrier so the base reads as "in the water".
+  const tNodes = STATE.nodes.filter(n => n.kind === 'tank');
   STATE.slots.forEach((sl, i) => {
     const sx = ld.slotCX[i];
+    const hWater = Math.min(tNodes[i].h, tNodes[i + 1].h);
     if (sl.kind === 'parallel') {
-      drawOneBarrier(ctx, sx, 0,        D * 0.38, Hm, sl.params.k1, 'barrier', sl, 'k1');
-      drawOneBarrier(ctx, sx, D * 0.62, D,        Hm, sl.params.k2, 'barrier', sl, 'k2');
+      drawOneBarrier(ctx, sx, 0,        D * 0.38, Hm, sl.params.k1, 'barrier', sl, 'k1', hWater);
+      drawOneBarrier(ctx, sx, D * 0.62, D,        Hm, sl.params.k2, 'barrier', sl, 'k2', hWater);
     } else if (sl.kind === 'diode') {
-      drawOneBarrier(ctx, sx, 0, D, Hm, CONFIG.DIODE.K_FWD, 'diode', sl, 'k');
+      drawOneBarrier(ctx, sx, 0, D, Hm, CONFIG.DIODE.K_FWD, 'diode', sl, 'k', hWater);
     } else {
-      drawOneBarrier(ctx, sx, 0, D, Hm, sl.params.k != null ? sl.params.k : CONFIG.RESISTOR.K_DEFAULT, sl.kind, sl, 'k');
+      drawOneBarrier(ctx, sx, 0, D, Hm, sl.params.k != null ? sl.params.k : CONFIG.RESISTOR.K_DEFAULT, sl.kind, sl, 'k', hWater);
     }
   });
 }
 
-function drawOneBarrier(ctx, cx, z0, z1, H, k, role, slot, kKey) {
+function drawOneBarrier(ctx, cx, z0, z1, H, k, role, slot, kKey, hWater) {
   const hw = 0.11;
   const fill = role === 'diode' ? '#e8c475' : role === 'capacitor' ? '#90c0e0' : '#c8a060';
   // back + side + top faces (unchanged)
@@ -188,6 +197,17 @@ function drawOneBarrier(ctx, cx, z0, z1, H, k, role, slot, kKey) {
   for (const p of fpts) { if (p.sx<bx0) bx0=p.sx; if (p.sx>bx1) bx1=p.sx; if (p.sy<by0) by0=p.sy; if (p.sy>by1) by1=p.sy; }
   ctx.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
   ctx.restore();
+  // ── submerged-tint band: water colour overlay on the front face up to hWater
+  // (gives the amber sponge a teal cast where the barrier dips into the water)
+  if (hWater && hWater > 0.01) {
+    const tintPts = pp([{x:cx-hw,y:0,z:z0},{x:cx+hw,y:0,z:z0},{x:cx+hw,y:hWater,z:z0},{x:cx-hw,y:hWater,z:z0}]);
+    const tp = project(cx, hWater, z0);
+    const bp = project(cx, 0, z0);
+    const tintGrad = ctx.createLinearGradient(tp.sx, tp.sy, bp.sx, bp.sy);
+    tintGrad.addColorStop(0, 'rgba(140,200,235,0.35)');
+    tintGrad.addColorStop(1, 'rgba(36,82,130,0.45)');
+    poly(ctx, tintPts, tintGrad);
+  }
   // diode arrow
   if (role === 'diode') {
     const m = project(cx, H * 0.5, z0);
