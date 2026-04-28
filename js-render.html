@@ -20,7 +20,7 @@ function drawFrame(ctx, timestamp) {
     ctx.globalAlpha = 1 - sm;
     drawReturnPipe(ctx);
     drawTankShell(ctx);
-    drawWater(ctx);
+    drawWater(ctx, timestamp);
     drawBarriers(ctx);
     drawPump(ctx, timestamp);
     ctx.globalAlpha = 1;
@@ -47,24 +47,101 @@ function drawTankShell(ctx) {
 }
 
 // ── Water ────────────────────────────────────────────────────────────────────
-function drawWater(ctx) {
+// Per-tank: gradient front/side faces (depth shading), wavy surface mesh whose
+// amplitude tracks |lastNetFlow|, meniscus highlight, and short-lived bubbles
+// in chambers with active flow. State for bubbles lives on the tank itself
+// (n.bubbles) so it doesn't pollute the edge-particle pool.
+function drawWater(ctx, timestamp) {
   const ld = STATE.layoutData; if (!ld) return;
   const D = CONFIG.PIPE.DEPTH;
   const tNodes = STATE.nodes.filter(n => n.kind === 'tank');
+  const tSec = (timestamp || 0) / 1000;
+
   for (let i = 0; i < tNodes.length; i++) {
     const n = tNodes[i], h = n.h;
     if (h < 0.01) continue;
     const xL = ld.chamberCX[i] - ld.chamberWidths[i] / 2;
     const xR = ld.chamberCX[i] + ld.chamberWidths[i] / 2;
-    // back
-    poly(ctx, pp([{x:xL,y:0,z:D},{x:xR,y:0,z:D},{x:xR,y:h,z:D},{x:xL,y:h,z:D}]), 'rgba(58,110,159,.65)');
-    // side walls (only outermost chambers)
-    if (i === 0)             poly(ctx, pp([{x:xL,y:0,z:0},{x:xL,y:0,z:D},{x:xL,y:h,z:D},{x:xL,y:h,z:0}]), 'rgba(78,130,180,.5)');
-    if (i === tNodes.length-1) poly(ctx, pp([{x:xR,y:0,z:0},{x:xR,y:0,z:D},{x:xR,y:h,z:D},{x:xR,y:h,z:0}]), 'rgba(78,130,180,.5)');
-    // surface top face
-    poly(ctx, pp([{x:xL,y:h,z:0},{x:xR,y:h,z:0},{x:xR,y:h,z:D},{x:xL,y:h,z:D}]), 'rgba(140,200,235,.75)', 'rgba(100,165,215,.9)', 0.8);
-    // front face
-    poly(ctx, pp([{x:xL,y:0,z:0},{x:xR,y:0,z:0},{x:xR,y:h,z:0},{x:xL,y:h,z:0}]), 'rgba(110,167,216,.8)');
+    const flow = Math.abs(n.lastNetFlow || 0);
+    const ampWave = Math.min(0.06, flow * 0.05);
+
+    // ── back face (z = D)
+    poly(ctx, pp([{x:xL,y:0,z:D},{x:xR,y:0,z:D},{x:xR,y:h,z:D},{x:xL,y:h,z:D}]), 'rgba(36,82,130,.7)');
+
+    // ── side walls with vertical gradient (only outermost chambers)
+    if (i === 0 || i === tNodes.length - 1) {
+      const xWall = (i === 0) ? xL : xR;
+      const tp = project(xWall, h, D / 2);
+      const bp = project(xWall, 0, D / 2);
+      const grad = ctx.createLinearGradient(tp.sx, tp.sy, bp.sx, bp.sy);
+      grad.addColorStop(0, 'rgba(140,200,235,0.65)');
+      grad.addColorStop(1, 'rgba(28,70,120,0.85)');
+      poly(ctx, pp([{x:xWall,y:0,z:0},{x:xWall,y:0,z:D},{x:xWall,y:h,z:D},{x:xWall,y:h,z:0}]), grad);
+    }
+
+    // ── front face with vertical gradient (lighter near surface, deeper at floor)
+    const tpF = project(xL, h, 0);
+    const bpF = project(xL, 0, 0);
+    const gradF = ctx.createLinearGradient(tpF.sx, tpF.sy, bpF.sx, bpF.sy);
+    gradF.addColorStop(0, 'rgba(140,200,235,0.78)');
+    gradF.addColorStop(1, 'rgba(36,82,130,0.78)');
+    poly(ctx, pp([{x:xL,y:0,z:0},{x:xR,y:0,z:0},{x:xR,y:h,z:0},{x:xL,y:h,z:0}]), gradF);
+
+    // ── wavy surface (top face) — subdivided along x
+    const segs = 18;
+    const front = [], back = [];
+    for (let s = 0; s <= segs; s++) {
+      const tx = s / segs;
+      const x = xL + (xR - xL) * tx;
+      const wave = ampWave * (
+        Math.sin(2.1 * x + tSec * 4.0) +
+        0.6 * Math.sin(5.3 * x - tSec * 6.4 + 1.3) +
+        0.4 * Math.sin(11.0 * x + tSec * 9.1 + 0.7)
+      );
+      const yWave = h + wave;
+      front.push(project(x, yWave, 0));
+      back.push(project(x, yWave, D));
+    }
+    const surfPts = front.concat(back.slice().reverse());
+    poly(ctx, surfPts, 'rgba(150,205,235,.85)', 'rgba(100,165,215,.95)', 1);
+
+    // ── meniscus highlight band (just below front crest)
+    ctx.save();
+    ctx.strokeStyle = 'rgba(210,235,250,0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    front.forEach((p, j) => j ? ctx.lineTo(p.sx, p.sy + 2) : ctx.moveTo(p.sx, p.sy + 2));
+    ctx.stroke();
+    ctx.restore();
+
+    // ── bubbles (tank-local; spawn rate scales with |lastNetFlow|)
+    if (!n.bubbles) n.bubbles = [];
+    const dt = Math.min(0.1, tSec - (n._bubblesLastT || tSec));
+    n._bubblesLastT = tSec;
+    const spawnPerSec = Math.min(10, flow * 6);
+    if (spawnPerSec > 0.4 && Math.random() < spawnPerSec * dt) {
+      n.bubbles.push({
+        x: xL + Math.random() * (xR - xL),
+        y: 0.05 + Math.random() * h * 0.6,
+        z: Math.random() * D,
+        rise: 0.4 + Math.random() * 0.7,
+        born: tSec,
+        life: 0.7 + Math.random() * 0.7
+      });
+    }
+    ctx.save();
+    ctx.fillStyle = 'rgba(225,240,255,0.9)';
+    n.bubbles = n.bubbles.filter(b => {
+      const age = tSec - b.born;
+      if (age > b.life) return false;
+      b.y += b.rise * dt;
+      if (b.y > h - 0.05) return false;
+      const sp = project(b.x, b.y, b.z);
+      ctx.globalAlpha = (1 - age / b.life) * 0.85;
+      ctx.beginPath(); ctx.arc(sp.sx, sp.sy, 1.6, 0, Math.PI * 2); ctx.fill();
+      return true;
+    });
+    ctx.restore();
   }
 }
 
@@ -75,40 +152,37 @@ function drawBarriers(ctx) {
   STATE.slots.forEach((sl, i) => {
     const sx = ld.slotCX[i];
     if (sl.kind === 'parallel') {
-      drawOneBarrier(ctx, sx, 0, D * 0.38, Hm, sl.params.k1, 'barrier');
-      drawOneBarrier(ctx, sx, D * 0.62, D, Hm, sl.params.k2, 'barrier');
+      drawOneBarrier(ctx, sx, 0,        D * 0.38, Hm, sl.params.k1, 'barrier', sl, 'k1');
+      drawOneBarrier(ctx, sx, D * 0.62, D,        Hm, sl.params.k2, 'barrier', sl, 'k2');
     } else if (sl.kind === 'diode') {
-      drawOneBarrier(ctx, sx, 0, D, Hm, CONFIG.DIODE.K_FWD, 'diode');
+      drawOneBarrier(ctx, sx, 0, D, Hm, CONFIG.DIODE.K_FWD, 'diode', sl, 'k');
     } else {
-      drawOneBarrier(ctx, sx, 0, D, Hm, sl.params.k != null ? sl.params.k : CONFIG.RESISTOR.K_DEFAULT, sl.kind);
+      drawOneBarrier(ctx, sx, 0, D, Hm, sl.params.k != null ? sl.params.k : CONFIG.RESISTOR.K_DEFAULT, sl.kind, sl, 'k');
     }
   });
 }
 
-function drawOneBarrier(ctx, cx, z0, z1, H, k, role) {
+function drawOneBarrier(ctx, cx, z0, z1, H, k, role, slot, kKey) {
   const hw = 0.11;
   const fill = role === 'diode' ? '#e8c475' : role === 'capacitor' ? '#90c0e0' : '#c8a060';
-  const shadow = role === 'diode' ? '#a07820' : role === 'capacitor' ? '#5090b0' : '#8a5820';
-  // back + side + top faces
+  // back + side + top faces (unchanged)
   poly(ctx, pp([{x:cx-hw,y:0,z:z1},{x:cx+hw,y:0,z:z1},{x:cx+hw,y:H,z:z1},{x:cx-hw,y:H,z:z1}]), '#998050');
   poly(ctx, pp([{x:cx+hw,y:0,z:z0},{x:cx+hw,y:H,z:z0},{x:cx+hw,y:H,z:z1},{x:cx+hw,y:0,z:z1}]), '#b09060');
   poly(ctx, pp([{x:cx-hw,y:H,z:z0},{x:cx+hw,y:H,z:z0},{x:cx+hw,y:H,z:z1},{x:cx-hw,y:H,z:z1}]), '#b8a070');
-  // front face
+  // ── front face: solid base, then sponge texture on top
   const fpts = pp([{x:cx-hw,y:0,z:z0},{x:cx+hw,y:0,z:z0},{x:cx+hw,y:H,z:z0},{x:cx-hw,y:H,z:z0}]);
   poly(ctx, fpts, fill, '#888', 0.5);
-  // hatching (resistance density)
-  const nLines = Math.max(1, Math.min(12, Math.round(2.5 / k)));
   ctx.save();
   ctx.beginPath();
   fpts.forEach((p,j) => j ? ctx.lineTo(p.sx,p.sy) : ctx.moveTo(p.sx,p.sy));
-  ctx.closePath(); ctx.clip();
-  ctx.strokeStyle = shadow; ctx.lineWidth = 1; ctx.globalAlpha = 0.45;
-  for (let n = 0; n <= nLines; n++) {
-    const t = n / nLines;
-    const a = project(cx - hw, t * H, z0), b = project(cx + hw, t * H, z0);
-    ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke();
-  }
-  ctx.globalAlpha = 1; ctx.restore();
+  ctx.closePath();
+  ctx.clip();
+  const tex = getSpongeTexture(slot, k, kKey, role);
+  ctx.fillStyle = ctx.createPattern(tex, 'repeat');
+  let bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity;
+  for (const p of fpts) { if (p.sx<bx0) bx0=p.sx; if (p.sx>bx1) bx1=p.sx; if (p.sy<by0) by0=p.sy; if (p.sy>by1) by1=p.sy; }
+  ctx.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
+  ctx.restore();
   // diode arrow
   if (role === 'diode') {
     const m = project(cx, H * 0.5, z0);
@@ -118,6 +192,55 @@ function drawOneBarrier(ctx, cx, z0, z1, H, k, role) {
     ctx.beginPath(); ctx.moveTo(m.sx+r*0.6,m.sy-r*0.8); ctx.lineTo(m.sx+r*0.6,m.sy+r*0.8); ctx.stroke();
     ctx.restore();
   }
+}
+
+// Build (or reuse) an offscreen canvas with a procedural sponge pattern.
+// More conductive (higher k → more porous) ⇒ more visible holes.
+// Cached per slot keyed by (role, kKey, k) so parallel slots can hold two.
+function getSpongeTexture(slot, k, kKey, role) {
+  if (!slot._spongeCache) slot._spongeCache = new Map();
+  const cacheKey = role + '|' + kKey + '|' + k.toFixed(3);
+  let cached = slot._spongeCache.get(cacheKey);
+  if (cached) return cached;
+
+  const c = document.createElement('canvas');
+  c.width = 40; c.height = 80;
+  const cx = c.getContext('2d');
+
+  const palette = role === 'diode'
+    ? { base: '#e8c475', dark: '#a07820', light: '#f8e0a0' }
+    : role === 'capacitor'
+    ? { base: '#90c0e0', dark: '#3a6090', light: '#c0e0f4' }
+    : { base: '#c8a060', dark: '#7a4810', light: '#dcb878' };
+
+  cx.fillStyle = palette.base;
+  cx.fillRect(0, 0, c.width, c.height);
+
+  const kMax = CONFIG.RESISTOR.K_MAX;
+  const tk = clamp(k / kMax, 0, 1);
+  const nDark = Math.round(80 * tk + 25);
+  cx.fillStyle = palette.dark;
+  for (let i = 0; i < nDark; i++) {
+    const x = Math.random() * c.width;
+    const y = Math.random() * c.height;
+    const r = 1.4 + Math.random() * 1.7;
+    cx.beginPath(); cx.arc(x, y, r, 0, Math.PI * 2); cx.fill();
+  }
+  cx.fillStyle = palette.light;
+  cx.globalAlpha = 0.55;
+  for (let i = 0; i < 18; i++) {
+    const x = Math.random() * c.width;
+    const y = Math.random() * c.height;
+    const r = 0.7 + Math.random() * 0.9;
+    cx.beginPath(); cx.arc(x, y, r, 0, Math.PI * 2); cx.fill();
+  }
+  cx.globalAlpha = 1;
+
+  slot._spongeCache.set(cacheKey, c);
+  if (slot._spongeCache.size > 8) {
+    slot._spongeCache.delete(slot._spongeCache.keys().next().value);
+  }
+  return c;
 }
 
 // ── Bottom return duct + vertical drop pipes ────────────────────────────────
