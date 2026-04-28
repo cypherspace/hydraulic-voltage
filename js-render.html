@@ -172,24 +172,34 @@ function drawSlot(ctx, i) {
 function drawOneBarrier(ctx, cx, z0, z1, H, k, role, slot, kKey) {
   const hw = 0.11;
   const fill = role === 'diode' ? '#e8c475' : role === 'capacitor' ? '#90c0e0' : '#c8a060';
-  // back + side + top faces (unchanged)
-  poly(ctx, pp([{x:cx-hw,y:0,z:z1},{x:cx+hw,y:0,z:z1},{x:cx+hw,y:H,z:z1},{x:cx-hw,y:H,z:z1}]), '#998050');
-  poly(ctx, pp([{x:cx+hw,y:0,z:z0},{x:cx+hw,y:H,z:z0},{x:cx+hw,y:H,z:z1},{x:cx+hw,y:0,z:z1}]), '#b09060');
-  poly(ctx, pp([{x:cx-hw,y:H,z:z0},{x:cx+hw,y:H,z:z0},{x:cx+hw,y:H,z:z1},{x:cx-hw,y:H,z:z1}]), '#b8a070');
-  // ── front face: solid base, then sponge texture on top
-  const fpts = pp([{x:cx-hw,y:0,z:z0},{x:cx+hw,y:0,z:z0},{x:cx+hw,y:H,z:z0},{x:cx-hw,y:H,z:z0}]);
-  poly(ctx, fpts, fill, '#888', 0.5);
-  ctx.save();
-  ctx.beginPath();
-  fpts.forEach((p,j) => j ? ctx.lineTo(p.sx,p.sy) : ctx.moveTo(p.sx,p.sy));
-  ctx.closePath();
-  ctx.clip();
   const tex = getSpongeTexture(slot, k, kKey, role);
-  ctx.fillStyle = ctx.createPattern(tex, 'repeat');
-  let bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity;
-  for (const p of fpts) { if (p.sx<bx0) bx0=p.sx; if (p.sx>bx1) bx1=p.sx; if (p.sy<by0) by0=p.sy; if (p.sy>by1) by1=p.sy; }
-  ctx.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
-  ctx.restore();
+
+  // Paint a face with its base colour, then the sponge texture clipped to it
+  // — same hole pattern on every face so the barrier reads as porous through
+  // and through, not just on the front.
+  function spongeFace(facePts, baseFill, edgeColor, lw) {
+    poly(ctx, facePts, baseFill, edgeColor, lw);
+    ctx.save();
+    ctx.beginPath();
+    facePts.forEach((p, j) => j ? ctx.lineTo(p.sx, p.sy) : ctx.moveTo(p.sx, p.sy));
+    ctx.closePath();
+    ctx.clip();
+    ctx.fillStyle = ctx.createPattern(tex, 'repeat');
+    let bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity;
+    for (const p of facePts) { if (p.sx<bx0) bx0=p.sx; if (p.sx>bx1) bx1=p.sx; if (p.sy<by0) by0=p.sy; if (p.sy>by1) by1=p.sy; }
+    ctx.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
+    ctx.restore();
+  }
+
+  // Back face (z=z1) — slightly darker base under the texture
+  spongeFace(pp([{x:cx-hw,y:0,z:z1},{x:cx+hw,y:0,z:z1},{x:cx+hw,y:H,z:z1},{x:cx-hw,y:H,z:z1}]), '#998050');
+  // Right side face (x=cx+hw) — visible parallelogram in cabinet projection
+  spongeFace(pp([{x:cx+hw,y:0,z:z0},{x:cx+hw,y:H,z:z0},{x:cx+hw,y:H,z:z1},{x:cx+hw,y:0,z:z1}]), '#b09060');
+  // Top face (y=H) — visible from above where the barrier sticks out of the water
+  spongeFace(pp([{x:cx-hw,y:H,z:z0},{x:cx+hw,y:H,z:z0},{x:cx+hw,y:H,z:z1},{x:cx-hw,y:H,z:z1}]), '#b8a070');
+  // Front face (z=z0) — main visible face
+  spongeFace(pp([{x:cx-hw,y:0,z:z0},{x:cx+hw,y:0,z:z0},{x:cx+hw,y:H,z:z0},{x:cx-hw,y:H,z:z0}]), fill, '#888', 0.5);
+
   // (Submerged tint on the right face is produced naturally by the next
   // chamber's water front face overlapping the right face in cabinet
   // projection — drawFrame's strict left-to-right order makes this work.)
@@ -461,7 +471,8 @@ function schResistor(ctx, x, y, k) {
   ctx.fillStyle = '#fff'; ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.rect(x-w/2, y-h/2, w, h); ctx.fill(); ctx.stroke();
   ctx.fillStyle = '#555'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('R' + (k != null ? '=' + (+k).toFixed(1) : ''), x, y + h/2 + 9);
+  // Display resistance R = 1/k.
+  ctx.fillText('R' + (k != null ? '=' + (1 / +k).toFixed(1) : ''), x, y + h/2 + 9);
 }
 function schDiode(ctx, x, y) {
   const r = 9;

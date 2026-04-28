@@ -35,9 +35,10 @@ function renderSlotCarousel() {
 function slotTileHTML(sl) {
   const icons = { resistor:'▨', parallel:'⋮▨▨', capacitor:'▭', diode:'▶|' };
   const names = { resistor:'Resistor', parallel:'Parallel', capacitor:'Capacitor', diode:'Diode' };
+  // Display resistance R = 1/k (familiar quantity for a resistor, matches V=IR).
   let param = '';
-  if (sl.kind === 'resistor' || sl.kind === 'capacitor') param = 'k=' + (+sl.params.k).toFixed(2);
-  else if (sl.kind === 'parallel') param = 'k₁=' + (+sl.params.k1).toFixed(1) + ' k₂=' + (+sl.params.k2).toFixed(1);
+  if (sl.kind === 'resistor' || sl.kind === 'capacitor') param = 'R=' + (1 / +sl.params.k).toFixed(2);
+  else if (sl.kind === 'parallel') param = 'R₁=' + (1 / +sl.params.k1).toFixed(1) + ' R₂=' + (1 / +sl.params.k2).toFixed(1);
   else if (sl.kind === 'diode') param = sl.params.forward === 'rl' ? '← RL' : '→ LR';
   return `<span class="slot-icon">${icons[sl.kind]||'?'}</span>
           <span class="slot-label">${names[sl.kind]||sl.kind}</span>
@@ -92,12 +93,15 @@ function openParamPanel(slotId) {
   pan.style.right = '8px';
   pan.innerHTML   = buildParamHTML(sl);
 
-  // Wire param sliders
+  // Wire param sliders. data-mode="r" means the slider operates in resistance
+  // (R) but the model still stores conductance (k = 1/R).
   pan.querySelectorAll('input[type="range"]').forEach(inp => {
     inp.addEventListener('input', () => {
       const out = pan.querySelector('#pv-' + inp.dataset.param);
-      if (out) out.textContent = (+inp.value).toFixed(2);
-      sl.params[inp.dataset.param] = +inp.value;
+      const displayVal = +inp.value;
+      const modelVal = inp.dataset.mode === 'r' ? 1 / displayVal : displayVal;
+      if (out) out.textContent = displayVal.toFixed(2);
+      sl.params[inp.dataset.param] = modelVal;
       STATE.needsLayout = true;
       renderSlotCarousel();
     });
@@ -123,14 +127,21 @@ function openParamPanel(slotId) {
 function buildParamHTML(sl) {
   const names = { resistor:'Resistor', parallel:'Parallel pair', capacitor:'Capacitor', diode:'Diode' };
   let fields = '';
-  const slider = (param, label, val, min, max, step) => `
-    <label><div class="param-row"><span>${label}</span><span class="param-value" id="pv-${param}">${(+val).toFixed(2)}</span></div>
-    <input type="range" data-param="${param}" min="${min}" max="${max}" step="${step}" value="${val}"></label>`;
-  if (sl.kind === 'resistor')  fields = slider('k','Conductance k (high=easy flow)',sl.params.k,CONFIG.RESISTOR.K_MIN,CONFIG.RESISTOR.K_MAX,0.05);
-  if (sl.kind === 'capacitor') fields = slider('k','Barrier conductance k',sl.params.k,CONFIG.RESISTOR.K_MIN,CONFIG.RESISTOR.K_MAX,0.05)
+  // Resistance slider: stores k = 1/R in the model, displays R to the user.
+  // Range R = [1/K_MAX .. 1/K_MIN] = [0.17 .. 20] in the configured limits.
+  const rslider = (param, label, val_k) => {
+    const r = 1 / val_k;
+    const rMin = (1 / CONFIG.RESISTOR.K_MAX);
+    const rMax = (1 / CONFIG.RESISTOR.K_MIN);
+    return `
+    <label><div class="param-row"><span>${label}</span><span class="param-value" id="pv-${param}">${r.toFixed(2)}</span></div>
+    <input type="range" data-param="${param}" data-mode="r" min="${rMin.toFixed(3)}" max="${rMax.toFixed(3)}" step="0.05" value="${r.toFixed(3)}"></label>`;
+  };
+  if (sl.kind === 'resistor')  fields = rslider('k','Resistance R (high=hard flow)',sl.params.k);
+  if (sl.kind === 'capacitor') fields = rslider('k','Barrier resistance R',sl.params.k)
     + `<p style="font-size:.75rem;color:var(--muted);margin:4px 0">Large chamber to the left stores charge (C = ${CONFIG.TANK.A_CAPACITOR}). RC time constant ≈ ${(1/sl.params.k * CONFIG.TANK.A_CAPACITOR).toFixed(1)} s.</p>`;
-  if (sl.kind === 'parallel')  fields = slider('k1','Front channel k₁',sl.params.k1,CONFIG.RESISTOR.K_MIN,CONFIG.RESISTOR.K_MAX,0.05)
-    + slider('k2','Back channel k₂',sl.params.k2,CONFIG.RESISTOR.K_MIN,CONFIG.RESISTOR.K_MAX,0.05);
+  if (sl.kind === 'parallel')  fields = rslider('k1','Front channel R₁',sl.params.k1)
+    + rslider('k2','Back channel R₂',sl.params.k2);
   if (sl.kind === 'diode')     fields = `<p style="font-size:.8rem;margin:4px 0">Forward direction: <strong>${sl.params.forward === 'rl' ? '← right-to-left' : '→ left-to-right'}</strong></p>
     <button id="flip-diode" style="font-size:.8rem;padding:4px 8px;border:1px solid var(--border);border-radius:4px;cursor:pointer;">Flip direction</button>`;
   return `<h3>${names[sl.kind]}</h3>${fields}
