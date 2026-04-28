@@ -57,11 +57,16 @@ function drawWater(ctx, timestamp) {
   const tNodes = STATE.nodes.filter(n => n.kind === 'tank');
   const tSec = (timestamp || 0) / 1000;
 
-  for (let i = 0; i < tNodes.length; i++) {
+  const N = tNodes.length;
+  const W = ld.totalWidth;
+  const barHw = 0.11; // matches drawOneBarrier; keeps water meeting the barrier face without overlap
+  for (let i = 0; i < N; i++) {
     const n = tNodes[i], h = n.h;
     if (h < 0.01) continue;
-    const xL = ld.chamberCX[i] - ld.chamberWidths[i] / 2;
-    const xR = ld.chamberCX[i] + ld.chamberWidths[i] / 2;
+    // Water spans from the previous barrier's right face to the next barrier's left face,
+    // or to the tank wall at the ends — so chambers visually merge into one partitioned tank.
+    const xL = (i === 0)     ? 0 : (ld.slotCX[i - 1] + barHw);
+    const xR = (i === N - 1) ? W : (ld.slotCX[i]     - barHw);
     const flow = Math.abs(n.lastNetFlow || 0);
     const ampWave = Math.min(0.06, flow * 0.05);
 
@@ -381,6 +386,9 @@ function drawParticles(ctx, alpha) {
   for (const p of STATE.particles) {
     const e = p.edgeId != null ? STATE.edgesById[p.edgeId] : null;
     if (!e || e.path.length < 1) continue;
+    // Particles only on pump-loop edges (pipes, pump body). Barrier/diode flow
+    // is conveyed by the chamber-side bubbles + wave amplitude in drawWater.
+    if (e.role !== 'pipe' && e.role !== 'pump' && e.role !== 'pump-rint') continue;
     const pt = edgePointAt(e.path, p.s);
     const sp = project(pt.x, pt.y + (p.zJitter || 0) * 0.1, (pt.z || 0) + (p.zJitter || 0) * 0.15);
     const speed = Math.abs(e.Q);
