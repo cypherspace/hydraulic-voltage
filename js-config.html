@@ -6,10 +6,10 @@
 const CONFIG = {
   VIEW: {
     W: 1200,
-    H: 700,
+    H: 580,
     PX_PER_UNIT: 48,
     ORIGIN_X: 80,        // world x=0 maps here on canvas
-    ORIGIN_Y: 600,       // world y=0 maps here (positive y goes up on canvas)
+    ORIGIN_Y: 460,       // world y=0 maps here; leaves ~120px below for the relocated pump duct
     COS30: Math.cos(Math.PI / 6),
     SIN30: 0.5,
     DEPTH_SCALE: 0.5     // cabinet projection foreshortening factor
@@ -38,14 +38,15 @@ const CONFIG = {
     RADIUS: 0.45,
     DEPTH: 1.6,          // z-extent of the loop (front-to-back)
     AREA: Math.PI * 0.45 * 0.45,
-    BOTTOM_Y: -1.5,      // y of pipe top — below the tank floor by UNDER_GAP
-    BOTTOM_HEIGHT: 0.9   // pipe vertical extent (yT − yB)
+    BOTTOM_Y: -1.4,      // y of pipe top — below the tank floor by UNDER_GAP (set with UNDER_GAP)
+    BOTTOM_HEIGHT: 1.0,  // pipe vertical extent (yT − yB)
+    DROP_HALF_WIDTH: 0.32 // half x-width of the vertical pipes connecting tank floor to duct
   },
 
   PUMP: {
     MAX_DP: 4.0,
     R_INT: 0.3,          // Thévenin internal resistance (Ω-equivalent); higher → more torque-vs-back-pressure tradeoff
-    UNDER_GAP: 1.5,      // visual gap between tank floor and top of return duct
+    UNDER_GAP: 0.8,      // visual gap between tank floor and top of return duct
     RAMP_TIME: 1.0,
     WIDTH: 1.6
   },

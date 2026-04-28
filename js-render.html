@@ -120,24 +120,65 @@ function drawOneBarrier(ctx, cx, z0, z1, H, k, role) {
   }
 }
 
-// ── Bottom return pipe ────────────────────────────────────────────────────────
+// ── Bottom return duct + vertical drop pipes ────────────────────────────────
+// Painter's-algorithm draw order: back face → drop pipes (back) → duct sides
+// → drop pipes (front) → duct front. Drop pipes anchor at chamber centres so
+// the visual lines up with the actual edge paths in the model.
 function drawReturnPipe(ctx) {
   const ld = STATE.layoutData; if (!ld) return;
   const W = ld.totalWidth, D = CONFIG.PIPE.DEPTH;
   const yT = CONFIG.PIPE.BOTTOM_Y, yB = yT - CONFIG.PIPE.BOTTOM_HEIGHT;
-  const arm = CONFIG.PUMP.WIDTH / 2 + 0.2, pc = ld.pumpCenterX;
-  // back wall
-  poly(ctx, pp([{x:0,y:yB,z:D},{x:W,y:yB,z:D},{x:W,y:yT,z:D},{x:0,y:yT,z:D}]), '#9499a2');
-  // left and right arms (front face + bottom)
-  for (const [x0,x1] of [[0,pc-arm],[pc+arm,W]]) {
-    poly(ctx, pp([{x:x0,y:yB,z:0},{x:x1,y:yB,z:0},{x:x1,y:yT,z:0},{x:x0,y:yT,z:0}]), '#c4c9d2', '#9499a2', 0.8);
-    poly(ctx, pp([{x:x0,y:yB,z:0},{x:x1,y:yB,z:0},{x:x1,y:yB,z:D},{x:x0,y:yB,z:D}]), '#a0a5ae');
+  const arm = CONFIG.PUMP.WIDTH / 2;
+  const pc = ld.pumpCenterX;
+  const dHW = CONFIG.PIPE.DROP_HALF_WIDTH;
+  // Drop-pipe anchor x: end-chamber centres (matches the actual model edge paths).
+  const xL = ld.chamberCX[0];
+  const xR = ld.chamberCX[ld.chamberCX.length - 1];
+  // Pipe colour palette (slightly cooler than the tank shell so they stand apart).
+  const cBack = '#82878f', cBackLit = '#9499a2', cSide = '#a8acb4', cFront = '#cfd3d9', cFrontEdge = '#7a7e86';
+
+  // ── 1. duct back face (full width)
+  poly(ctx, pp([{x:0,y:yB,z:D},{x:W,y:yB,z:D},{x:W,y:yT,z:D},{x:0,y:yT,z:D}]), cBack, cBackLit, 0.5);
+
+  // ── 2. drop-pipe back faces (between tank floor y=0 and duct top y=yT)
+  for (const xC of [xL, xR]) {
+    poly(ctx, pp([
+      {x:xC-dHW, y:yT, z:D}, {x:xC+dHW, y:yT, z:D},
+      {x:xC+dHW, y:0,  z:D}, {x:xC-dHW, y:0,  z:D}
+    ]), cBack);
   }
-  // end caps + vertical drop stubs
-  for (const xE of [0, W]) {
-    poly(ctx, pp([{x:xE,y:yB,z:0},{x:xE,y:yT,z:0},{x:xE,y:yT,z:D},{x:xE,y:yB,z:D}]), '#b0b5be');
-    poly(ctx, pp([{x:xE-0.12,y:yT,z:0},{x:xE+0.12,y:yT,z:0},{x:xE+0.12,y:0,z:0},{x:xE-0.12,y:0,z:0}]), '#b8bdc6', '#9499a2', 0.5);
-    poly(ctx, pp([{x:xE-0.12,y:yT,z:D},{x:xE+0.12,y:yT,z:D},{x:xE+0.12,y:0,z:D},{x:xE-0.12,y:0,z:D}]), '#9499a2');
+
+  // ── 3. duct top (left and right of pump cutout) — visible because y_top is below the tank
+  for (const [x0,x1] of [[0, pc - arm], [pc + arm, W]]) {
+    poly(ctx, pp([{x:x0,y:yT,z:0},{x:x1,y:yT,z:0},{x:x1,y:yT,z:D},{x:x0,y:yT,z:D}]), cSide, cBackLit, 0.5);
+  }
+
+  // ── 4. duct bottom (visible underside)
+  poly(ctx, pp([{x:0,y:yB,z:0},{x:W,y:yB,z:0},{x:W,y:yB,z:D},{x:0,y:yB,z:D}]), '#7a7e86');
+
+  // ── 5. duct end caps (left and right outermost faces)
+  poly(ctx, pp([{x:0,y:yB,z:0},{x:0,y:yT,z:0},{x:0,y:yT,z:D},{x:0,y:yB,z:D}]), cSide, cBackLit, 0.5);
+  poly(ctx, pp([{x:W,y:yB,z:0},{x:W,y:yT,z:0},{x:W,y:yT,z:D},{x:W,y:yB,z:D}]), cSide, cBackLit, 0.5);
+
+  // ── 6. drop-pipe side faces (front-facing right side of each drop-pipe — these "sell" the 3D shape)
+  for (const xC of [xL, xR]) {
+    poly(ctx, pp([
+      {x:xC+dHW, y:yT, z:0}, {x:xC+dHW, y:0, z:0},
+      {x:xC+dHW, y:0,  z:D}, {x:xC+dHW, y:yT, z:D}
+    ]), cSide, cBackLit, 0.5);
+  }
+
+  // ── 7. duct front face — split around the pump cutout
+  for (const [x0,x1] of [[0, pc - arm], [pc + arm, W]]) {
+    poly(ctx, pp([{x:x0,y:yB,z:0},{x:x1,y:yB,z:0},{x:x1,y:yT,z:0},{x:x0,y:yT,z:0}]), cFront, cFrontEdge, 1);
+  }
+
+  // ── 8. drop-pipe front faces (drawn last so they sit on top of duct front)
+  for (const xC of [xL, xR]) {
+    poly(ctx, pp([
+      {x:xC-dHW, y:yT, z:0}, {x:xC+dHW, y:yT, z:0},
+      {x:xC+dHW, y:0,  z:0}, {x:xC-dHW, y:0,  z:0}
+    ]), cFront, cFrontEdge, 1);
   }
 }
 
