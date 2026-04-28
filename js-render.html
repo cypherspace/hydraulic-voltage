@@ -150,10 +150,11 @@ function drawPump(ctx, timestamp) {
   poly(ctx, pp([{x:cx+arm,y:yB,z:0},{x:cx+arm,y:yT,z:0},{x:cx+arm,y:yT,z:D},{x:cx+arm,y:yB,z:D}]), '#234c7a');
   poly(ctx, pp([{x:cx-arm,y:yT,z:0},{x:cx+arm,y:yT,z:0},{x:cx+arm,y:yT,z:D},{x:cx-arm,y:yT,z:D}]), '#4878a8');
   poly(ctx, pp([{x:cx-arm,y:yB,z:0},{x:cx+arm,y:yB,z:0},{x:cx+arm,y:yT,z:0},{x:cx-arm,y:yT,z:0}]), '#3a6ea0', '#1e3d60', 1);
-  // impeller
+  // impeller — sits in the LEFT half (V-source side)
   const pwr = STATE.pumpTarget;
-  const ctr = project(cx, (yB + yT) / 2, 0);
-  const rOut = arm * CONFIG.VIEW.PX_PER_UNIT * 0.52;
+  const cxImp = cx - arm / 2;
+  const ctr = project(cxImp, (yB + yT) / 2, 0);
+  const rOut = arm * CONFIG.VIEW.PX_PER_UNIT * 0.32;
   const rHub = rOut * 0.22;
   const angle = (timestamp / 1000) * pwr * Math.PI * 8;
   ctx.save();
@@ -164,6 +165,23 @@ function drawPump(ctx, timestamp) {
     ctx.lineTo(ctr.sx + Math.cos(a)*rOut, ctr.sy + Math.sin(a)*rOut); ctx.stroke();
   }
   ctx.fillStyle = '#3060a0'; ctx.beginPath(); ctx.arc(ctr.sx, ctr.sy, rHub, 0, Math.PI*2); ctx.fill();
+
+  // internal-resistance coil — sits in the RIGHT half (between nPumpIn and nPumpMid)
+  const cxRes = cx + arm / 2;
+  const cy = (yB + yT) / 2;
+  const coilL = project(cxRes - arm * 0.4, cy, 0);
+  const coilR = project(cxRes + arm * 0.4, cy, 0);
+  ctx.strokeStyle = '#cc8a3a'; ctx.lineWidth = 2;
+  const segs = 8;
+  ctx.beginPath();
+  for (let s = 0; s <= segs; s++) {
+    const t = s / segs;
+    const px = coilL.sx + (coilR.sx - coilL.sx) * t;
+    const py = coilL.sy + (s % 2 === 0 ? -4 : 4);
+    s ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  }
+  ctx.stroke();
+
   if (pwr > 0.01) {
     const lp = project(cx, yT + 0.12, 0);
     ctx.fillStyle = '#1f4fa3'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
@@ -237,9 +255,13 @@ function drawSchematic(ctx) {
     else if (sl.kind === 'diode')    schDiode(ctx, sp.sx, sp.sy);
     else if (sl.kind === 'parallel') schParallel(ctx, sp.sx, sp.sy, sl.params.k1, sl.params.k2);
   });
-  // Battery symbol
+  // Battery symbol (with terminal dP = source dP − iPump · R_int)
   const bp = project(ld.pumpCenterX, Y - 3.2, 0);
-  schBattery(ctx, bp.sx, bp.sy, getPumpDP());
+  const pumpEdge = STATE.edgesById[STATE.pumpEdgeId];
+  const iPump = pumpEdge ? pumpEdge.Q : 0;
+  const dpSource = getPumpDP();
+  const dpTerminal = dpSource - iPump * CONFIG.PUMP.R_INT;
+  schBattery(ctx, bp.sx, bp.sy, dpSource, dpTerminal);
   // Voltage labels on tank nodes
   ctx.font = '10px monospace'; ctx.fillStyle = '#1f4fa3'; ctx.textAlign = 'center';
   tN.forEach((n, i) => {
@@ -268,14 +290,18 @@ function schParallel(ctx, x, y, k1, k2) {
   ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.moveTo(x-12,y-22); ctx.lineTo(x-12,y+22); ctx.moveTo(x+12,y-22); ctx.lineTo(x+12,y+22); ctx.stroke();
 }
-function schBattery(ctx, x, y, dP) {
+function schBattery(ctx, x, y, dpSource, dpTerminal) {
   ctx.strokeStyle = '#1f4fa3'; ctx.lineWidth = 2.5;
   for (let s = 0; s < 2; s++) {
     const hw = s === 0 ? 13 : 8, px = x + (s === 0 ? -7 : 7);
     ctx.beginPath(); ctx.moveTo(px, y-hw); ctx.lineTo(px, y+hw); ctx.stroke();
   }
   ctx.fillStyle = '#1f4fa3'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText(dP.toFixed(2) + ' V', x, y - 18);
+  ctx.fillText(dpSource.toFixed(2) + ' V', x, y - 18);
+  if (dpTerminal != null && Math.abs(dpTerminal - dpSource) > 0.01) {
+    ctx.fillStyle = '#5a85b0'; ctx.font = '9px monospace';
+    ctx.fillText('term ' + dpTerminal.toFixed(2), x, y + 26);
+  }
 }
 
 // ── Probe markers ─────────────────────────────────────────────────────────────

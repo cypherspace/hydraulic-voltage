@@ -38,13 +38,14 @@ const CONFIG = {
     RADIUS: 0.45,
     DEPTH: 1.6,          // z-extent of the loop (front-to-back)
     AREA: Math.PI * 0.45 * 0.45,
-    BOTTOM_Y: 0.5,       // y of return-pipe centerline
-    BOTTOM_HEIGHT: 0.9   // visual radius of return pipe
+    BOTTOM_Y: -1.5,      // y of pipe top — below the tank floor by UNDER_GAP
+    BOTTOM_HEIGHT: 0.9   // pipe vertical extent (yT − yB)
   },
 
   PUMP: {
     MAX_DP: 4.0,
-    R_INT: 0.05,
+    R_INT: 0.3,          // Thévenin internal resistance (Ω-equivalent); higher → more torque-vs-back-pressure tradeoff
+    UNDER_GAP: 1.5,      // visual gap between tank floor and top of return duct
     RAMP_TIME: 1.0,
     WIDTH: 1.6
   },

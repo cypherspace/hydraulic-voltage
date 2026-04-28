@@ -27,7 +27,7 @@ function layoutFromSlots() {
   const W_SLOT   = 1.0;                  // x-width of a barrier slot visual
   const Y_TOP    = 0;                    // base (floor) of all top chambers
   const Y_MID    = T.H_INITIAL * 0.5;   // mid-height for barrier edge path
-  const Y_BOT    = -1.8;                // bottom return pipe centerline
+  const Y_BOT    = P.BOTTOM_Y - P.BOTTOM_HEIGHT / 2;   // bottom return pipe centerline (derived)
   const Z_FRONT  = 0.25;                // front channel z (parallel slots)
   const Z_BACK   = P.DEPTH - 0.25;      // back channel z
   const Z_MID    = P.DEPTH / 2;         // default z for single-channel slots
@@ -78,10 +78,11 @@ function layoutFromSlots() {
   }
 
   // ── pump junction nodes ──────────────────────────────────────────────────────
-  // nPumpIn  ← right-side junction (bottom return, east of pump)
-  // nPumpOut ← left-side junction  (bottom return, west of pump)
+  // Thévenin model: nPumpIn → [R_int] → nPumpMid → [V-source dP] → nPumpOut.
+  // Flow direction (forward): right → centre → left.
   const PUMP_ARM = CONFIG.PUMP.WIDTH / 2;
   const nPumpIn  = mkNode({ kind: 'junction', pos: { x: pumpCenterX + PUMP_ARM, y: Y_BOT, z: Z_MID }, role: 'pipe', label: 'pumpIn'  });
+  const nPumpMid = mkNode({ kind: 'junction', pos: { x: pumpCenterX,            y: Y_BOT, z: Z_MID }, role: 'pipe', label: 'pumpMid' });
   const nPumpOut = mkNode({ kind: 'junction', pos: { x: pumpCenterX - PUMP_ARM, y: Y_BOT, z: Z_MID }, role: 'pipe', label: 'pumpOut' });
 
   // ── barrier / slot edges (top section) ──────────────────────────────────────
@@ -134,12 +135,23 @@ function layoutFromSlots() {
     role: 'pipe'
   });
 
-  // Pump (voltage source)
-  const pumpEdge = mkEdge({
-    a: nPumpIn.id, b: nPumpOut.id,
-    comp: Component.pump(0),   // dP updated each frame by solver
+  // Pump internal resistance: nPumpIn → nPumpMid (right half of pump body)
+  mkEdge({
+    a: nPumpIn.id, b: nPumpMid.id,
+    comp: Component.resistor(1 / CONFIG.PUMP.R_INT),
     path: [
       { x: pumpCenterX + PUMP_ARM, y: Y_BOT, z: Z_MID },
+      { x: pumpCenterX,             y: Y_BOT, z: Z_MID }
+    ],
+    role: 'pump-rint'
+  });
+
+  // Pump ideal voltage source: nPumpMid → nPumpOut (left half of pump body)
+  const pumpEdge = mkEdge({
+    a: nPumpMid.id, b: nPumpOut.id,
+    comp: Component.pump(0),   // dP updated each frame by solver
+    path: [
+      { x: pumpCenterX,            y: Y_BOT, z: Z_MID },
       { x: pumpCenterX - PUMP_ARM, y: Y_BOT, z: Z_MID }
     ],
     role: 'pump'
@@ -172,9 +184,10 @@ function layoutFromSlots() {
   STATE.edgesById   = {};
   for (const n of nodes) STATE.nodesById[n.id] = n;
   for (const e of edges) STATE.edgesById[e.id] = e;
-  STATE.pumpEdgeId  = pumpEdge.id;
-  STATE.needsLayout = false;
-  STATE.totalWidth  = totalWidth;
+  STATE.pumpEdgeId    = pumpEdge.id;
+  STATE.pumpMidNodeId = nPumpMid.id;
+  STATE.needsLayout   = false;
+  STATE.totalWidth    = totalWidth;
 
   // Store layout geometry for the renderer.
   STATE.layoutData = {
