@@ -170,11 +170,23 @@ function layoutFromSlots() {
   });
 
   // ── update STATE ─────────────────────────────────────────────────────────────
-  // Preserve h values for nodes that already existed in previous layout.
-  if (STATE.nodesById) {
+  // Preserve tank state across relayout (e.g. when the user drags an R slider,
+  // which sets needsLayout = true). Match by .label since node ids are
+  // regenerated each layout. Without this, water levels snap back to H_INITIAL
+  // on every slider tick.
+  if (STATE.nodes && STATE.nodes.length) {
+    const oldByLabel = {};
+    for (const oldN of STATE.nodes) {
+      if (oldN.kind === 'tank' && oldN.label) oldByLabel[oldN.label] = oldN;
+    }
     for (const n of nodes) {
-      const old = STATE.nodesById[n.label];  // match by label
-      if (old && n.kind === 'tank') n.h = old.h;
+      if (n.kind !== 'tank') continue;
+      const old = oldByLabel[n.label];
+      if (!old) continue;
+      n.h = old.h;
+      n.lastNetFlow = old.lastNetFlow || 0;
+      n.bubbles = old.bubbles || [];
+      n._bubblesLastT = old._bubblesLastT;
     }
   }
 
